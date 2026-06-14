@@ -1,3 +1,5 @@
+use std::fs;
+use std::path::Path;
 use rand::Rng;
 
 /// Generate a random 8-character lowercase alphanumeric download ID
@@ -25,5 +27,33 @@ pub fn sanitize_filename(name: &str) -> String {
         "untitled".to_string()
     } else {
         trimmed.to_string()
+    }
+}
+
+/// Enforce 1-level directory creation rule
+pub fn create_dir_one_level(path: &Path) -> Result<(), String> {
+    if path.exists() {
+        return Ok(());
+    }
+    
+    if let Some(parent) = path.parent() {
+        let parent_exists = if parent.as_os_str().is_empty() {
+            true
+        } else {
+            parent.exists()
+        };
+        
+        if parent_exists {
+            fs::create_dir(path)
+                .map_err(|e| format!("Failed to create directory '{:?}': {}", path, e))?;
+            Ok(())
+        } else {
+            Err(format!(
+                "Parent directory '{:?}' does not exist. Only 1-level directory creation is supported.",
+                parent
+            ))
+        }
+    } else {
+        Err(format!("Invalid path '{:?}'", path))
     }
 }
