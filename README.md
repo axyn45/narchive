@@ -23,6 +23,22 @@ A resilient, concurrent command-line downloader for Netease Cloud Music written 
    cargo build --release
    ```
 
+## CLI Arguments
+
+| Argument | Environment Variable | Description |
+| --- | --- | --- |
+| `--api` | `NETEASE_API` | Endpoint URL for the Netease API |
+| `--cookie` | `USER_COOKIE` | Cookie for a logged in user |
+| `--download-path` | `DOWNLOAD_PATH` | Download destination folder path |
+| `--user-agent` | `USER_AGENT` | Custom User Agent |
+| `--query-params` | `QUERY_PARAMS` | Custom query parameters (e.g. `key=val&another=123`) |
+| `--br` | `TARGET_BR` | Target bitrate in bps (e.g. `320000`) |
+| `--track` | — | Track ID(s) to download (can be specified multiple times) |
+| `--album` | — | Album ID(s) to download (can be specified multiple times) |
+| `--playlist` | — | Playlist ID(s) to download (can be specified multiple times) |
+| `--resume` | — | Path to the download folder to resume |
+| `--concurrent` | `CONCURRENT_DOWNLOADS` | Maximum concurrent downloads (default: `3`) |
+
 ## Usage
 
 ### Download Tracks, Albums, or Playlists
