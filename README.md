@@ -1,5 +1,7 @@
 # narchive
 
+[简体中文](README_zh.md)
+
 A resilient, concurrent command-line downloader for Netease Cloud Music written in Rust.
 
 ## Features
