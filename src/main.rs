@@ -340,7 +340,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 format!("{} - {}", artist_names, detail.name)
             };
 
-            let pb = mp.add(indicatif::ProgressBar::new_spinner());
+            let pb = mp.insert_before(&overall_pb, indicatif::ProgressBar::new_spinner());
             pb.set_style(
                 indicatif::ProgressStyle::default_spinner()
                     .template("  {spinner:.cyan} {msg}")
