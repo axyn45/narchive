@@ -8,9 +8,11 @@ use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use clap::Parser;
 use chrono::Utc;
 use lofty::picture::MimeType;
+
 
 use args::Args;
 use config::{DownloadConfig, find_resume_dir};
@@ -177,7 +179,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .build()?;
 
     // 6. Gather and resolve all target song IDs
-    println!("Resolving song lists from API...");
+    let spinner = indicatif::ProgressBar::new_spinner();
+    spinner.set_style(
+        indicatif::ProgressStyle::default_spinner()
+            .template("{spinner:.cyan} {msg}")
+            .unwrap()
+    );
+    spinner.enable_steady_tick(std::time::Duration::from_millis(80));
+    spinner.set_message("Resolving song lists from API...");
+
     let mut all_target_song_ids = HashSet::new();
 
     // Direct tracks
@@ -187,7 +197,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Album tracks
     for &album_id in &config.albums {
-        println!("Fetching song IDs for album {}...", album_id);
+        spinner.set_message(format!("Resolving album {}...", album_id));
         match fetch_album_song_ids(&client, &resolved_api, resolved_cookie.as_deref(), &config, album_id).await {
             Ok(ids) => {
                 for id in ids {
@@ -195,14 +205,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
             Err(e) => {
-                eprintln!("Warning: Failed to fetch song IDs for album {}: {}", album_id, e);
+                spinner.println(format!("  \x1b[33m⚠️\x1b[0m Warning: Failed to fetch song IDs for album {}: {}", album_id, e));
             }
         }
     }
 
     // Playlist tracks
     for &playlist_id in &config.playlists {
-        println!("Fetching song IDs for playlist {}...", playlist_id);
+        spinner.set_message(format!("Resolving playlist {}...", playlist_id));
         match fetch_playlist_song_ids(&client, &resolved_api, resolved_cookie.as_deref(), &config, playlist_id).await {
             Ok(ids) => {
                 for id in ids {
@@ -210,19 +220,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
             Err(e) => {
-                eprintln!("Warning: Failed to fetch song IDs for playlist {}: {}", playlist_id, e);
+                spinner.println(format!("  \x1b[33m⚠️\x1b[0m Warning: Failed to fetch song IDs for playlist {}: {}", playlist_id, e));
             }
         }
     }
 
     if all_target_song_ids.is_empty() {
+        spinner.finish_and_clear();
         eprintln!("Error: Resolved 0 target songs to download.");
         std::process::exit(1);
     }
 
-    println!("Resolved {} unique target songs.", all_target_song_ids.len());
-
     // 7. Collect local files in the session directory to see what is already downloaded
+    spinner.set_message("Scanning session directory for existing downloads...");
     let mut downloaded_songs = HashMap::new();
     if let Ok(entries) = fs::read_dir(&session_dir) {
         for entry in entries {
@@ -251,151 +261,245 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     if missing_ids.is_empty() {
-        println!("All songs are already downloaded! Task complete.");
+        spinner.finish_and_clear();
+        println!("✨ All songs are already downloaded! Task complete.");
         return Ok(());
     }
 
-    println!("Found {} missing songs to download.", missing_ids.len());
-
     // 9. Fetch details (metadata) for all target song IDs to use during tag writing
-    println!("Fetching metadata for target songs...");
+    spinner.set_message(format!(
+        "Fetching metadata for {} target songs ({} missing)...",
+        all_target_song_ids.len(),
+        missing_ids.len()
+    ));
     let target_ids_vec: Vec<u64> = all_target_song_ids.iter().copied().collect();
-    let song_details = fetch_song_details(&client, &resolved_api, resolved_cookie.as_deref(), &config, &target_ids_vec).await?;
+    let song_details = match fetch_song_details(&client, &resolved_api, resolved_cookie.as_deref(), &config, &target_ids_vec).await {
+        Ok(details) => details,
+        Err(e) => {
+            spinner.finish_and_clear();
+            eprintln!("Error: Failed to fetch song details: {}", e);
+            std::process::exit(1);
+        }
+    };
 
-    // 10. Process downloading of missing songs
+    spinner.finish_and_clear();
+
+    println!(
+        "🔍 Resolved {} unique target songs. Found {} missing songs to download.",
+        all_target_song_ids.len(),
+        missing_ids.len()
+    );
+
+    // 10. Process downloading of missing songs concurrently with dynamic TUI progress bars
     let total_missing = missing_ids.len();
-    for (idx, &song_id) in missing_ids.iter().enumerate() {
-        let progress_prefix = format!("[{}/{}]", idx + 1, total_missing);
-        
+    let song_details = Arc::new(song_details);
+    let mp = Arc::new(indicatif::MultiProgress::new());
+    
+    let overall_pb = mp.add(indicatif::ProgressBar::new(total_missing as u64));
+    overall_pb.set_style(
+        indicatif::ProgressStyle::default_bar()
+            .template("{spinner:.green} [{elapsed_precise}] [{bar:40.green/blue}] {pos}/{len} ({percent}%) {msg}")
+            .unwrap()
+            .progress_chars("█░")
+    );
+    overall_pb.set_message("Downloading songs...");
+    overall_pb.enable_steady_tick(std::time::Duration::from_millis(80));
+
+    let sem = Arc::new(tokio::sync::Semaphore::new(3));
+    let mut join_set = tokio::task::JoinSet::new();
+
+    for &song_id in &missing_ids {
+        let sem = Arc::clone(&sem);
+        let mp = Arc::clone(&mp);
+        let overall_pb = overall_pb.clone();
+        let client = client.clone();
+        let resolved_api = resolved_api.clone();
+        let resolved_cookie = resolved_cookie.clone();
+        let config = config.clone();
+        let session_dir = session_dir.clone();
+        let song_details = Arc::clone(&song_details);
+
         let detail = match song_details.get(&song_id) {
             Some(d) => d.clone(),
             None => {
-                eprintln!("{} Warning: Song metadata not found for ID {}, skipping...", progress_prefix, song_id);
+                overall_pb.inc(1);
                 continue;
             }
         };
 
-        let artist_names = detail.ar.as_ref()
-            .map(|artists| artists.iter().map(|a| a.name.as_str()).collect::<Vec<_>>().join(", "))
-            .unwrap_or_default();
-        
-        let display_name = if artist_names.is_empty() {
-            detail.name.clone()
-        } else {
-            format!("{} - {}", artist_names, detail.name)
-        };
+        join_set.spawn(async move {
+            let _permit = sem.acquire().await.unwrap();
 
-        println!("{} Downloading song: \"{}\" (ID: {})", progress_prefix, display_name, song_id);
+            let artist_names = detail.ar.as_ref()
+                .map(|artists| artists.iter().map(|a| a.name.as_str()).collect::<Vec<_>>().join(", "))
+                .unwrap_or_default();
+            
+            let display_name = if artist_names.is_empty() {
+                detail.name.clone()
+            } else {
+                format!("{} - {}", artist_names, detail.name)
+            };
 
-        // Fetch download link from song url API
-        let url_data = match fetch_song_download_url(&client, &resolved_api, resolved_cookie.as_deref(), &config, song_id).await {
-            Ok(Some(data)) => data,
-            _ => {
-                eprintln!("{} Error: Failed to fetch download URL for ID {}, skipping...", progress_prefix, song_id);
-                continue;
+            let pb = mp.add(indicatif::ProgressBar::new_spinner());
+            pb.set_style(
+                indicatif::ProgressStyle::default_spinner()
+                    .template("  {spinner:.cyan} {msg}")
+                    .unwrap()
+            );
+            pb.enable_steady_tick(std::time::Duration::from_millis(80));
+            pb.set_message(format!("Queued: {}", display_name));
+
+            // Fetch download link
+            pb.set_message(format!("Fetching URL: {}", display_name));
+            let url_data = match fetch_song_download_url(&client, &resolved_api, resolved_cookie.as_deref(), &config, song_id).await {
+                Ok(Some(data)) => data,
+                _ => {
+                    let _ = mp.println(format!("  \x1b[31m✘\x1b[0m Failed: URL fetch error for ID {}", song_id));
+                    pb.finish_and_clear();
+                    overall_pb.inc(1);
+                    return;
+                }
+            };
+
+            let download_url = match url_data.url {
+                Some(url) if !url.is_empty() => url,
+                _ => {
+                    let _ = mp.println(format!("  \x1b[33m🔒\x1b[0m Restricted: {}", display_name));
+                    pb.finish_and_clear();
+                    overall_pb.inc(1);
+                    return;
+                }
+            };
+
+            let ext = url_data.file_type.unwrap_or_else(|| "mp3".to_string()).to_lowercase();
+            
+            let temp_filename = format!("{}.tmp.{}", song_id, ext);
+            let temp_filepath = session_dir.join(&temp_filename);
+            
+            let sanitized_base = sanitize_filename(&display_name);
+            let final_filename = format!("{}.{}", sanitized_base, ext);
+            let final_filepath = session_dir.join(&final_filename);
+
+            // Start downloading stream
+            pb.set_message(format!("Connecting: {}", display_name));
+            let mut download_resp = match client.get(&download_url).send().await {
+                Ok(r) if r.status().is_success() => r,
+                _ => {
+                    let _ = mp.println(format!("  \x1b[31m✘\x1b[0m Failed: Connection error for {}", display_name));
+                    pb.finish_and_clear();
+                    overall_pb.inc(1);
+                    return;
+                }
+            };
+
+            let content_length = download_resp.content_length();
+            if let Some(total_bytes) = content_length {
+                pb.set_length(total_bytes);
+                pb.set_style(
+                    indicatif::ProgressStyle::default_bar()
+                        .template("  {spinner:.cyan} {msg:.bold} [{bar:25.cyan/blue}] {bytes}/{total_bytes} ({bytes_per_sec}, {eta})")
+                        .unwrap()
+                        .progress_chars("█░")
+                );
+            } else {
+                pb.set_style(
+                    indicatif::ProgressStyle::default_spinner()
+                        .template("  {spinner:.cyan} {msg:.bold} {bytes} ({bytes_per_sec})")
+                        .unwrap()
+                );
             }
-        };
+            pb.set_message(display_name.clone());
 
-        let download_url = match url_data.url {
-            Some(url) if !url.is_empty() => url,
-            _ => {
-                eprintln!("{} Warning: Song ID {} is copyright-restricted or not available, skipping...", progress_prefix, song_id);
-                continue;
+            let mut temp_file = match File::create(&temp_filepath) {
+                Ok(f) => f,
+                Err(e) => {
+                    let _ = mp.println(format!("  \x1b[31m✘\x1b[0m Failed: Temp file creation error for {}: {}", display_name, e));
+                    pb.finish_and_clear();
+                    overall_pb.inc(1);
+                    return;
+                }
+            };
+
+            let mut download_failed = None;
+            while let Some(chunk) = download_resp.chunk().await.unwrap_or(None) {
+                if let Err(e) = temp_file.write_all(&chunk) {
+                    download_failed = Some(e.to_string());
+                    break;
+                }
+                pb.inc(chunk.len() as u64);
             }
-        };
 
-        // Determine extension (default to mp3 if type is unavailable)
-        let ext = url_data.file_type.unwrap_or_else(|| "mp3".to_string()).to_lowercase();
-        
-        // Define paths for temporary download and final output
-        let temp_filename = format!("{}.tmp.{}", song_id, ext);
-        let temp_filepath = session_dir.join(&temp_filename);
-        
-        let sanitized_base = sanitize_filename(&display_name);
-        let final_filename = format!("{}.{}", sanitized_base, ext);
-        let final_filepath = session_dir.join(&final_filename);
-
-        // Download audio file stream to temporary location
-        println!("  -> Streaming audio data...");
-        let mut download_resp = match client.get(&download_url).send().await {
-            Ok(r) if r.status().is_success() => r,
-            _ => {
-                eprintln!("  -> Error: Failed to download audio from url, skipping...");
-                continue;
+            if let Some(err_msg) = download_failed {
+                let _ = mp.println(format!("  \x1b[31m✘\x1b[0m Failed: Write error for {}: {}", display_name, err_msg));
+                let _ = fs::remove_file(&temp_filepath);
+                pb.finish_and_clear();
+                overall_pb.inc(1);
+                return;
             }
-        };
+            
+            drop(temp_file);
 
-        let mut temp_file = match File::create(&temp_filepath) {
-            Ok(f) => f,
-            Err(e) => {
-                eprintln!("  -> Error: Failed to create temp file: {}", e);
-                continue;
-            }
-        };
+            // Fetch lyrics
+            pb.set_style(
+                indicatif::ProgressStyle::default_spinner()
+                    .template("  {spinner:.cyan} {msg}")
+                    .unwrap()
+            );
+            pb.set_message(format!("Fetching lyrics: {}", display_name));
+            let lyric = fetch_lyric(&client, &resolved_api, resolved_cookie.as_deref(), &config, song_id).await;
 
-        let mut download_failed = false;
-        while let Some(chunk) = download_resp.chunk().await.unwrap_or(None) {
-            if let Err(e) = temp_file.write_all(&chunk) {
-                eprintln!("  -> Error: Failed to write chunk to disk: {}", e);
-                download_failed = true;
-                break;
-            }
-        }
-
-        if download_failed {
-            let _ = fs::remove_file(&temp_filepath);
-            continue;
-        }
-        
-        // Flush and close the file handle
-        drop(temp_file);
-
-        // Fetch lyrics
-        println!("  -> Fetching lyrics...");
-        let lyric = fetch_lyric(&client, &resolved_api, resolved_cookie.as_deref(), &config, song_id).await;
-
-        // Download album cover artwork if available
-        let mut cover_bytes = None;
-        let mut cover_mime = None;
-        if let Some(album) = &detail.al {
-            if let Some(pic_url) = &album.pic_url {
-                println!("  -> Downloading album cover...");
-                if let Ok(cover_resp) = client.get(pic_url).send().await {
-                    if cover_resp.status().is_success() {
-                        let mime_str = cover_resp.headers()
-                            .get(reqwest::header::CONTENT_TYPE)
-                            .and_then(|v| v.to_str().ok())
-                            .unwrap_or("image/jpeg")
-                            .to_string();
-                        
-                        if let Ok(bytes) = cover_resp.bytes().await {
-                            cover_bytes = Some(bytes.to_vec());
-                            cover_mime = match mime_str.as_str() {
-                                "image/png" => Some(MimeType::Png),
-                                _ => Some(MimeType::Jpeg),
-                            };
+            // Download cover artwork
+            let mut cover_bytes = None;
+            let mut cover_mime = None;
+            if let Some(album) = &detail.al {
+                if let Some(pic_url) = &album.pic_url {
+                    pb.set_message(format!("Downloading cover: {}", display_name));
+                    if let Ok(cover_resp) = client.get(pic_url).send().await {
+                        if cover_resp.status().is_success() {
+                            let mime_str = cover_resp.headers()
+                                .get(reqwest::header::CONTENT_TYPE)
+                                .and_then(|v| v.to_str().ok())
+                                .unwrap_or("image/jpeg")
+                                .to_string();
+                            
+                            if let Ok(bytes) = cover_resp.bytes().await {
+                                cover_bytes = Some(bytes.to_vec());
+                                cover_mime = match mime_str.as_str() {
+                                    "image/png" => Some(MimeType::Png),
+                                    _ => Some(MimeType::Jpeg),
+                                };
+                            }
                         }
                     }
                 }
             }
-        }
 
-        // Apply metadata tags to temp file
-        println!("  -> Embedding tags and metadata...");
-        if let Err(e) = apply_metadata(&temp_filepath, &detail, lyric, cover_bytes, cover_mime) {
-            eprintln!("  -> Warning: Failed to write metadata tags: {}", e);
-            // We still keep the file even if metadata writing fails
-        }
+            // Embed tags
+            pb.set_message(format!("Embedding tags: {}", display_name));
+            if let Err(e) = apply_metadata(&temp_filepath, &detail, lyric, cover_bytes, cover_mime) {
+                let _ = mp.println(format!("  \x1b[33m⚠️\x1b[0m Warning: Failed to embed tags for {}: {}", display_name, e));
+            }
 
-        // Rename from temp file to final filename atomically
-        if let Err(e) = fs::rename(&temp_filepath, &final_filepath) {
-            eprintln!("  -> Error: Failed to rename temp file to final path: {}", e);
-            let _ = fs::remove_file(&temp_filepath);
-        } else {
-            println!("  -> Successfully saved: {:?}", final_filename);
+            // Finalize
+            if let Err(e) = fs::rename(&temp_filepath, &final_filepath) {
+                let _ = mp.println(format!("  \x1b[31m✘\x1b[0m Failed to save: {} ({})", final_filename, e));
+                let _ = fs::remove_file(&temp_filepath);
+            } else {
+                let _ = mp.println(format!("  \x1b[32m✔\x1b[0m Saved: \x1b[1m{}\x1b[0m", final_filename));
+            }
+
+            pb.finish_and_clear();
+            overall_pb.inc(1);
+        });
+    }
+
+    while let Some(res) = join_set.join_next().await {
+        if let Err(e) = res {
+            eprintln!("Task join error: {}", e);
         }
     }
 
-    println!("\nDownload session completed successfully!");
+    overall_pb.finish_with_message("Done!");
+    println!("\n✨ Download session completed successfully!");
     Ok(())
 }

@@ -118,7 +118,7 @@ pub async fn fetch_song_details(
         
         let resp = client.get(url).send().await?;
         if !resp.status().is_success() {
-            println!("Warning: failed to fetch song details for batch: HTTP {}", resp.status());
+            eprintln!("Warning: failed to fetch song details for batch: HTTP {}", resp.status());
             continue;
         }
         
