@@ -12,7 +12,9 @@ A resilient, concurrent command-line downloader for Netease Cloud Music written 
 
 ## Setup
 
-1. Configure the Netease Cloud Music API URL in a `.env` file in the project root:
+This tool requires an active instance of a Netease Cloud Music API. It is designed to work with [NeteaseCloudMusicApiEnhanced](https://github.com/neteasecloudmusicapienhanced/api-enhanced).
+
+1. Configure the API endpoint URL in a `.env` file in the project root:
    ```env
    NETEASE_API=http://localhost:3000
    # Optional: Add cookie for VIP/restricted tracks
