@@ -15,13 +15,40 @@ use lofty::picture::MimeType;
 
 
 use args::Args;
-use config::{DownloadConfig, find_resume_dir};
+use config::{DownloadConfig, get_resume_config_path};
 use api::{
     fetch_album_song_ids, fetch_playlist_song_ids, fetch_song_details,
     fetch_song_download_url, fetch_lyric,
 };
 use metadata::{get_netease_id_from_file, apply_metadata};
 use utils::{generate_download_id, sanitize_filename};
+
+fn create_dir_one_level(path: &Path) -> Result<(), String> {
+    if path.exists() {
+        return Ok(());
+    }
+    
+    if let Some(parent) = path.parent() {
+        let parent_exists = if parent.as_os_str().is_empty() {
+            true
+        } else {
+            parent.exists()
+        };
+        
+        if parent_exists {
+            fs::create_dir(path)
+                .map_err(|e| format!("Failed to create directory '{:?}': {}", path, e))?;
+            Ok(())
+        } else {
+            Err(format!(
+                "Parent directory '{:?}' does not exist. Only 1-level directory creation is supported.",
+                parent
+            ))
+        }
+    } else {
+        Err(format!("Invalid path '{:?}'", path))
+    }
+}
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -58,33 +85,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     let resolved_cookie = cli_cookie;
 
-    // Ensure the download base path directory exists
-    fs::create_dir_all(&download_path)?;
-
     let mut config: DownloadConfig;
     let session_dir: PathBuf;
 
     // 4. Handle Session Resume or Task Creation
-    if let Some(resume_id) = &args.resume {
-        // Search and locate the session directory
-        session_dir = match find_resume_dir(&download_path, resume_id) {
-            Ok(dir) => dir,
+    if let Some(resume_path_str) = &args.resume {
+        let resume_path = Path::new(resume_path_str);
+        let config_file_path = match get_resume_config_path(resume_path) {
+            Ok(p) => p,
             Err(e) => {
                 eprintln!("Error: {}", e);
                 std::process::exit(1);
             }
         };
-
-        let mut config_file_path = session_dir.join(".config");
-        if !config_file_path.exists() {
-            let old_path = session_dir.join("config.json");
-            if old_path.exists() {
-                config_file_path = old_path;
-            } else {
-                eprintln!("Error: .config not found in session directory '{:?}'", session_dir);
-                std::process::exit(1);
-            }
-        }
 
         // Read and parse current configuration (which does not contain api or cookie)
         let config_str = match fs::read_to_string(&config_file_path) {
@@ -104,6 +117,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         };
         let mut migrated = false;
+
+        // Migrate 'download_id' (remove it if exists, since we no longer keep it)
+        if let Some(obj) = val.as_object_mut() {
+            if obj.remove("download_id").is_some() {
+                migrated = true;
+            }
+        }
 
         // Migrate 'time_created' -> 'time'
         if let Some(time_created_val) = val.get("time_created") {
@@ -140,10 +160,37 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         config = match serde_json::from_value(val) {
             Ok(cfg) => cfg,
             Err(e) => {
-                eprintln!("Error: Failed to parse configuration in '{:?}': {}", session_dir, e);
+                eprintln!("Error: Failed to parse configuration in '{:?}': {}", resume_path, e);
                 std::process::exit(1);
             }
         };
+
+        // Determine target download directory (session_dir)
+        // If download_path argument is set, overwrite config.path with it
+        if let Some(ref dl_path) = download_path {
+            let target_path = Path::new(dl_path);
+            if let Err(e) = create_dir_one_level(target_path) {
+                eprintln!("Error: {}", e);
+                std::process::exit(1);
+            }
+            let abs_target_path = fs::canonicalize(target_path)?
+                .to_string_lossy()
+                .into_owned();
+            
+            if config.path != abs_target_path {
+                config.path = abs_target_path;
+                migrated = true;
+            }
+            session_dir = fs::canonicalize(target_path)?;
+        } else {
+            // Otherwise, default to the resume folder itself
+            session_dir = fs::canonicalize(resume_path)?;
+            let abs_session_path = session_dir.to_string_lossy().into_owned();
+            if config.path != abs_session_path {
+                config.path = abs_session_path;
+                migrated = true;
+            }
+        }
 
         // If command-line/env values differ from configuration, overwrite and save
         let mut modified = migrated;
@@ -185,19 +232,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
 
+        let target_config_path = session_dir.join(".narchive-dl");
         if modified {
-            println!("⚙️ Configuration overridden. Updating .config...");
+            println!("⚙️ Configuration overridden. Updating .narchive-dl...");
             let updated_config_str = serde_json::to_string_pretty(&config)?;
-            let target_path = session_dir.join(".config");
-            fs::write(&target_path, updated_config_str)?;
-            if config_file_path != target_path {
+            fs::write(&target_config_path, updated_config_str)?;
+            if config_file_path != target_config_path && config_file_path.parent() == target_config_path.parent() {
                 let _ = fs::remove_file(&config_file_path);
             }
         } else {
-            println!("🔄 Resuming session '{}'. Using existing configuration.", resume_id);
-            let target_path = session_dir.join(".config");
-            if config_file_path != target_path {
-                let _ = fs::rename(&config_file_path, &target_path);
+            println!("🔄 Resuming session. Using existing configuration.");
+            if config_file_path != target_config_path {
+                let updated_config_str = serde_json::to_string_pretty(&config)?;
+                fs::write(&target_config_path, updated_config_str)?;
+                if config_file_path.parent() == target_config_path.parent() {
+                    let _ = fs::remove_file(&config_file_path);
+                }
             }
         }
     } else {
@@ -209,16 +259,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         let download_id = generate_download_id();
-        let time_created = Utc::now().format("%Y%m%d%H%M%S").to_string();
 
-        let folder_name = format!("narchive-{}-{}", time_created, download_id);
-        session_dir = Path::new(&download_path).join(&folder_name);
-        fs::create_dir_all(&session_dir)?;
+        // Determine download directory
+        let target_dir = match &download_path {
+            Some(path_str) => {
+                let path = Path::new(path_str);
+                if let Err(e) = create_dir_one_level(path) {
+                    eprintln!("Error: {}", e);
+                    std::process::exit(1);
+                }
+                fs::canonicalize(path)?
+            }
+            None => {
+                let folder_name = format!("narchive-{}", download_id);
+                let path = Path::new(&folder_name);
+                fs::create_dir(path)?;
+                fs::canonicalize(path)?
+            }
+        };
+
+        session_dir = target_dir;
 
         config = DownloadConfig {
-            download_id,
             time: Utc::now().timestamp_millis() as u64,
-            path: fs::canonicalize(&download_path)?.to_string_lossy().into_owned(),
+            path: session_dir.to_string_lossy().into_owned(),
             user_agent: cli_user_agent,
             query_params: cli_query_params,
             br: cli_br,
@@ -227,12 +291,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             playlists: cli_playlists,
         };
 
-        let config_file_path = session_dir.join(".config");
+        let config_file_path = session_dir.join(".narchive-dl");
         let config_str = serde_json::to_string_pretty(&config)?;
         fs::write(config_file_path, config_str)?;
 
         println!("Created new download session folder: {:?}", session_dir);
-    }
+    };
 
     // 5. Initialize Http Client with custom user agent if specified
     let mut headers = reqwest::header::HeaderMap::new();

@@ -1,12 +1,10 @@
-use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 /// Persistent configuration stored as JSON in the session folder.
 /// Note: api and cookie are excluded to be specified at runtime or loaded from .env.
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct DownloadConfig {
-    pub download_id: String,
     pub time: u64,
     pub path: String,
     pub user_agent: Option<String>,
@@ -17,31 +15,25 @@ pub struct DownloadConfig {
     pub playlists: Vec<u64>,
 }
 
-/// Find the unique session folder matching 'narchive-*-<resume_id>' in the download path
-pub fn find_resume_dir(download_path: &str, resume_id: &str) -> Result<PathBuf, String> {
-    let read_dir = fs::read_dir(download_path)
-        .map_err(|e| format!("Failed to read download path '{}': {}", download_path, e))?;
-    
-    let mut matching_dirs = vec![];
-    for entry in read_dir {
-        if let Ok(entry) = entry {
-            let path = entry.path();
-            if path.is_dir() {
-                if let Some(dir_name) = path.file_name().and_then(|n| n.to_str()) {
-                    if dir_name.starts_with("narchive-") && dir_name.ends_with(&format!("-{}", resume_id)) {
-                        matching_dirs.push(path);
-                    }
-                }
-            }
+/// Find the configuration file in the specified resume directory
+pub fn get_resume_config_path(resume_dir: &Path) -> Result<PathBuf, String> {
+    if !resume_dir.exists() {
+        return Err(format!("Resume directory '{:?}' does not exist.", resume_dir));
+    }
+    if !resume_dir.is_dir() {
+        return Err(format!("Resume path '{:?}' is not a directory.", resume_dir));
+    }
+
+    let files = [".narchive-dl", ".config", "config.json"];
+    for file in &files {
+        let path = resume_dir.join(file);
+        if path.exists() && path.is_file() {
+            return Ok(path);
         }
     }
-    
-    if matching_dirs.is_empty() {
-        return Err(format!("No download session folder found ending with '-{}' in '{}'", resume_id, download_path));
-    }
-    if matching_dirs.len() > 1 {
-        return Err(format!("Multiple download session folders found ending with '-{}' in '{}': {:?}", resume_id, download_path, matching_dirs));
-    }
-    
-    Ok(matching_dirs.remove(0))
+
+    Err(format!(
+        "No download configuration file (.narchive-dl, .config, or config.json) found in '{:?}'",
+        resume_dir
+    ))
 }

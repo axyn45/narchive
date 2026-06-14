@@ -17,8 +17,8 @@ pub struct Args {
     pub cookie: Option<String>,
 
     /// Download destination folder path
-    #[arg(long, env = "DOWNLOAD_PATH", default_value = "./narchive-dl")]
-    pub download_path: String,
+    #[arg(long, env = "DOWNLOAD_PATH")]
+    pub download_path: Option<String>,
 
     /// Custom User Agent
     #[arg(long, env = "USER_AGENT")]
