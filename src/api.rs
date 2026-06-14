@@ -41,8 +41,19 @@ pub struct AlbumResponse {
 }
 
 #[derive(Deserialize, Debug, Clone)]
-pub struct PlaylistTrackResponse {
-    pub songs: Option<Vec<AlbumResponseSong>>,
+pub struct PlaylistTrackId {
+    pub id: u64,
+}
+
+#[derive(Deserialize, Debug, Clone)]
+pub struct PlaylistDetail {
+    #[serde(rename = "trackIds")]
+    pub track_ids: Option<Vec<PlaylistTrackId>>,
+}
+
+#[derive(Deserialize, Debug, Clone)]
+pub struct PlaylistDetailResponse {
+    pub playlist: Option<PlaylistDetail>,
 }
 
 #[derive(Deserialize, Debug, Clone)]
@@ -165,17 +176,19 @@ pub async fn fetch_playlist_song_ids(
     config: &DownloadConfig,
     playlist_id: u64,
 ) -> Result<Vec<u64>, Box<dyn std::error::Error>> {
-    let url = build_url(api_base, "playlist/track/all", &[("id", &playlist_id.to_string())], cookie, config)?;
+    let url = build_url(api_base, "playlist/detail", &[("id", &playlist_id.to_string())], cookie, config)?;
     let resp = client.get(url).send().await?;
     if !resp.status().is_success() {
         return Err(format!("Failed to fetch playlist {}: HTTP {}", playlist_id, resp.status()).into());
     }
     
-    let body: PlaylistTrackResponse = resp.json().await?;
+    let body: PlaylistDetailResponse = resp.json().await?;
     let mut song_ids = vec![];
-    if let Some(songs) = body.songs {
-        for song in songs {
-            song_ids.push(song.id);
+    if let Some(playlist) = body.playlist {
+        if let Some(track_ids) = playlist.track_ids {
+            for track in track_ids {
+                song_ids.push(track.id);
+            }
         }
     }
     Ok(song_ids)
