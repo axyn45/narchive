@@ -43,7 +43,7 @@ pub fn apply_metadata(
     cover_bytes: Option<Vec<u8>>,
     cover_mime: Option<MimeType>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let mut tagged_file = Probe::open(filepath)?.read()?;
+    let mut tagged_file = Probe::open(filepath)?.guess_file_type()?.read()?;
     let primary_type = tagged_file.primary_tag_type();
     let tag = match tagged_file.primary_tag_mut() {
         Some(t) => t,

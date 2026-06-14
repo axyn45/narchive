@@ -31,6 +31,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 2. Parse command line arguments
     let args = Args::parse();
 
+    if args.concurrent == 0 {
+        eprintln!("Error: Concurrency limit (--concurrent / CONCURRENT_DOWNLOADS) must be at least 1.");
+        std::process::exit(1);
+    }
+
     // 3. Resolve configurations from command-line overrides or environment variables
     let cli_api = args.api.clone();
     let cli_cookie = args.cookie.clone();
@@ -305,7 +310,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     overall_pb.set_message("Downloading songs...");
     overall_pb.enable_steady_tick(std::time::Duration::from_millis(80));
 
-    let sem = Arc::new(tokio::sync::Semaphore::new(3));
+    let sem = Arc::new(tokio::sync::Semaphore::new(args.concurrent));
     let mut join_set = tokio::task::JoinSet::new();
 
     for &song_id in &missing_ids {
@@ -378,7 +383,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 let ext = url_data.file_type.unwrap_or_else(|| "mp3".to_string()).to_lowercase();
                 
-                let temp_filename = format!("{}.tmp.{}", song_id, ext);
+                let temp_filename = format!("{}.{}.tmp", song_id, ext);
                 let temp_filepath = session_dir.join(&temp_filename);
                 
                 let sanitized_base = sanitize_filename(&display_name);
