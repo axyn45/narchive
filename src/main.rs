@@ -75,23 +75,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         };
 
-        let config_file_path = session_dir.join("config.json");
+        let mut config_file_path = session_dir.join(".config");
         if !config_file_path.exists() {
-            eprintln!("Error: config.json not found in session directory '{:?}'", session_dir);
-            std::process::exit(1);
+            let old_path = session_dir.join("config.json");
+            if old_path.exists() {
+                config_file_path = old_path;
+            } else {
+                eprintln!("Error: .config not found in session directory '{:?}'", session_dir);
+                std::process::exit(1);
+            }
         }
 
-        // Read and parse current config.json (which does not contain api or cookie)
+        // Read and parse current configuration (which does not contain api or cookie)
         let config_str = fs::read_to_string(&config_file_path)?;
         config = match serde_json::from_str(&config_str) {
             Ok(cfg) => cfg,
             Err(e) => {
-                eprintln!("Error: Failed to parse config.json in '{:?}': {}", session_dir, e);
+                eprintln!("Error: Failed to parse configuration in '{:?}': {}", session_dir, e);
                 std::process::exit(1);
             }
         };
 
-        // If command-line/env values differ from config.json, overwrite and save
+        // If command-line/env values differ from configuration, overwrite and save
         let mut modified = false;
 
         if let Some(ref ua) = cli_user_agent {
@@ -132,11 +137,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         if modified {
-            println!("Configuration overridden. Updating config.json...");
+            println!("⚙️ Configuration overridden. Updating .config...");
             let updated_config_str = serde_json::to_string_pretty(&config)?;
-            fs::write(&config_file_path, updated_config_str)?;
+            let target_path = session_dir.join(".config");
+            fs::write(&target_path, updated_config_str)?;
+            if config_file_path != target_path {
+                let _ = fs::remove_file(&config_file_path);
+            }
         } else {
-            println!("Resuming session '{}'. Using existing configuration.", resume_id);
+            println!("🔄 Resuming session '{}'. Using existing configuration.", resume_id);
+            let target_path = session_dir.join(".config");
+            if config_file_path != target_path {
+                let _ = fs::rename(&config_file_path, &target_path);
+            }
         }
     } else {
         // Create new download session. Ensure at least one track, album, or playlist target is supplied.
@@ -165,7 +178,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             playlists: cli_playlists,
         };
 
-        let config_file_path = session_dir.join("config.json");
+        let config_file_path = session_dir.join(".config");
         let config_str = serde_json::to_string_pretty(&config)?;
         fs::write(config_file_path, config_str)?;
 

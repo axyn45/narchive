@@ -47,4 +47,8 @@ pub struct Args {
     /// Resume a download session by its 8-character ID
     #[arg(long)]
     pub resume: Option<String>,
+
+    /// Maximum concurrent downloads
+    #[arg(long = "concurrent", env = "CONCURRENT_DOWNLOADS", default_value_t = 3)]
+    pub concurrent: usize,
 }
