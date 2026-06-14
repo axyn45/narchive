@@ -87,8 +87,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         // Read and parse current configuration (which does not contain api or cookie)
-        let config_str = fs::read_to_string(&config_file_path)?;
-        let mut val: serde_json::Value = serde_json::from_str(&config_str)?;
+        let config_str = match fs::read_to_string(&config_file_path) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("Error: Failed to read configuration file '{:?}': {}", config_file_path, e);
+                std::process::exit(1);
+            }
+        };
+
+        let mut val: serde_json::Value = match serde_json::from_str(&config_str) {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!("Error: The configuration file '{:?}' is corrupted or contains invalid JSON.", config_file_path);
+                eprintln!("Details: {}", e);
+                std::process::exit(1);
+            }
+        };
         let mut migrated = false;
 
         // Migrate 'time_created' -> 'time'
