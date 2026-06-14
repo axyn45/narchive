@@ -116,13 +116,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 std::process::exit(1);
             }
         };
-        let mut migrated = false;
-
         // Migrate 'download_id' (remove it if exists, since we no longer keep it)
         if let Some(obj) = val.as_object_mut() {
-            if obj.remove("download_id").is_some() {
-                migrated = true;
-            }
+            obj.remove("download_id");
         }
 
         // Migrate 'time_created' -> 'time'
@@ -136,7 +132,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if let Some(obj) = val.as_object_mut() {
                     obj.insert("time".to_string(), serde_json::json!(ms));
                     obj.remove("time_created");
-                    migrated = true;
                 }
             }
         }
@@ -152,7 +147,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if let Some(obj) = val.as_object_mut() {
                     obj.insert("path".to_string(), serde_json::json!(abs_path));
                     obj.remove("download_path");
-                    migrated = true;
                 }
             }
         }
@@ -164,6 +158,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 std::process::exit(1);
             }
         };
+
+        // Ignore the loaded timestamp and update with the latest millisecond timestamp
+        config.time = Utc::now().timestamp_millis() as u64;
 
         // Determine target download directory (session_dir)
         // If download_path argument is set, overwrite config.path with it
@@ -179,7 +176,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             
             if config.path != abs_target_path {
                 config.path = abs_target_path;
-                migrated = true;
             }
             session_dir = fs::canonicalize(target_path)?;
         } else {
@@ -188,12 +184,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let abs_session_path = session_dir.to_string_lossy().into_owned();
             if config.path != abs_session_path {
                 config.path = abs_session_path;
-                migrated = true;
             }
         }
 
         // If command-line/env values differ from configuration, overwrite and save
-        let mut modified = migrated;
+        // We always update the timestamp, so we always write back the configuration
+        let mut modified = true;
 
         if let Some(ref ua) = cli_user_agent {
             if Some(ua) != config.user_agent.as_ref() {
