@@ -88,7 +88,42 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         // Read and parse current configuration (which does not contain api or cookie)
         let config_str = fs::read_to_string(&config_file_path)?;
-        config = match serde_json::from_str(&config_str) {
+        let mut val: serde_json::Value = serde_json::from_str(&config_str)?;
+        let mut migrated = false;
+
+        // Migrate 'time_created' -> 'time'
+        if let Some(time_created_val) = val.get("time_created") {
+            if let Some(time_str) = time_created_val.as_str() {
+                let ms = if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(time_str, "%Y%m%d%H%M%S") {
+                    dt.and_utc().timestamp_millis() as u64
+                } else {
+                    chrono::Utc::now().timestamp_millis() as u64
+                };
+                if let Some(obj) = val.as_object_mut() {
+                    obj.insert("time".to_string(), serde_json::json!(ms));
+                    obj.remove("time_created");
+                    migrated = true;
+                }
+            }
+        }
+
+        // Migrate 'download_path' -> 'path'
+        if let Some(download_path_val) = val.get("download_path") {
+            if let Some(path_str) = download_path_val.as_str() {
+                let abs_path = if let Ok(canon) = fs::canonicalize(path_str) {
+                    canon.to_string_lossy().into_owned()
+                } else {
+                    path_str.to_string()
+                };
+                if let Some(obj) = val.as_object_mut() {
+                    obj.insert("path".to_string(), serde_json::json!(abs_path));
+                    obj.remove("download_path");
+                    migrated = true;
+                }
+            }
+        }
+
+        config = match serde_json::from_value(val) {
             Ok(cfg) => cfg,
             Err(e) => {
                 eprintln!("Error: Failed to parse configuration in '{:?}': {}", session_dir, e);
@@ -97,7 +132,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         };
 
         // If command-line/env values differ from configuration, overwrite and save
-        let mut modified = false;
+        let mut modified = migrated;
 
         if let Some(ref ua) = cli_user_agent {
             if Some(ua) != config.user_agent.as_ref() {
@@ -168,8 +203,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         config = DownloadConfig {
             download_id,
-            time_created,
-            download_path: download_path.clone(),
+            time: Utc::now().timestamp_millis() as u64,
+            path: fs::canonicalize(&download_path)?.to_string_lossy().into_owned(),
             user_agent: cli_user_agent,
             query_params: cli_query_params,
             br: cli_br,

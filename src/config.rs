@@ -7,8 +7,8 @@ use serde::{Deserialize, Serialize};
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct DownloadConfig {
     pub download_id: String,
-    pub time_created: String,
-    pub download_path: String,
+    pub time: u64,
+    pub path: String,
     pub user_agent: Option<String>,
     pub query_params: Option<String>,
     pub br: Option<u32>,
