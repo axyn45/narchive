@@ -1,0 +1,7 @@
+prompt.md
+.env
+narchive-dl/
+
+# Added by cargo
+/target
+
