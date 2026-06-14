@@ -61,13 +61,12 @@ struct Args {
     resume: Option<String>,
 }
 
-/// Persistent configuration stored as JSON in the session folder
+/// Persistent configuration stored as JSON in the session folder.
+/// Note: api and cookie are excluded to be specified at runtime or loaded from .env.
 #[derive(Serialize, Deserialize, Clone, Debug)]
 struct DownloadConfig {
     download_id: String,
     time_created: String,
-    api: String,
-    cookie: Option<String>,
     download_path: String,
     user_agent: Option<String>,
     query_params: Option<String>,
@@ -97,6 +96,7 @@ struct SongDetail {
     name: String,
     ar: Option<Vec<SongArtist>>,
     al: Option<SongAlbum>,
+    no: Option<u32>, // track number
     #[serde(rename = "publishTime")]
     publish_time: Option<i64>,
 }
@@ -235,6 +235,7 @@ fn build_url(
     api_base: &str,
     path: &str,
     params: &[(&str, &str)],
+    cookie: Option<&str>,
     config: &DownloadConfig,
 ) -> Result<reqwest::Url, Box<dyn std::error::Error>> {
     let mut url = reqwest::Url::parse(&format!("{}/{}", api_base.trim_end_matches('/'), path.trim_start_matches('/')))?;
@@ -243,8 +244,8 @@ fn build_url(
         for &(k, v) in params {
             query_pairs.append_pair(k, v);
         }
-        if let Some(cookie) = &config.cookie {
-            query_pairs.append_pair("cookie", cookie);
+        if let Some(cookie_val) = cookie {
+            query_pairs.append_pair("cookie", cookie_val);
         }
         // Use randomCNIP=true by default to bypass regional limitations
         query_pairs.append_pair("randomCNIP", "true");
@@ -266,6 +267,8 @@ fn build_url(
 /// Batch fetch details for a list of song IDs
 async fn fetch_song_details(
     client: &reqwest::Client,
+    api_base: &str,
+    cookie: Option<&str>,
     config: &DownloadConfig,
     song_ids: &[u64],
 ) -> Result<HashMap<u64, SongDetail>, Box<dyn std::error::Error>> {
@@ -274,7 +277,7 @@ async fn fetch_song_details(
     // Batch in chunks of 100 to avoid exceeding URL limits
     for chunk in song_ids.chunks(100) {
         let ids_str = chunk.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(",");
-        let url = build_url(&config.api, "song/detail", &[("ids", &ids_str)], config)?;
+        let url = build_url(api_base, "song/detail", &[("ids", &ids_str)], cookie, config)?;
         
         let resp = client.get(url).send().await?;
         if !resp.status().is_success() {
@@ -296,10 +299,12 @@ async fn fetch_song_details(
 /// Fetch list of song IDs in an album
 async fn fetch_album_song_ids(
     client: &reqwest::Client,
+    api_base: &str,
+    cookie: Option<&str>,
     config: &DownloadConfig,
     album_id: u64,
 ) -> Result<Vec<u64>, Box<dyn std::error::Error>> {
-    let url = build_url(&config.api, "album", &[("id", &album_id.to_string())], config)?;
+    let url = build_url(api_base, "album", &[("id", &album_id.to_string())], cookie, config)?;
     let resp = client.get(url).send().await?;
     if !resp.status().is_success() {
         return Err(format!("Failed to fetch album {}: HTTP {}", album_id, resp.status()).into());
@@ -318,10 +323,12 @@ async fn fetch_album_song_ids(
 /// Fetch list of song IDs in a playlist
 async fn fetch_playlist_song_ids(
     client: &reqwest::Client,
+    api_base: &str,
+    cookie: Option<&str>,
     config: &DownloadConfig,
     playlist_id: u64,
 ) -> Result<Vec<u64>, Box<dyn std::error::Error>> {
-    let url = build_url(&config.api, "playlist/track/all", &[("id", &playlist_id.to_string())], config)?;
+    let url = build_url(api_base, "playlist/track/all", &[("id", &playlist_id.to_string())], cookie, config)?;
     let resp = client.get(url).send().await?;
     if !resp.status().is_success() {
         return Err(format!("Failed to fetch playlist {}: HTTP {}", playlist_id, resp.status()).into());
@@ -340,10 +347,21 @@ async fn fetch_playlist_song_ids(
 /// Fetch download URL for a single song ID
 async fn fetch_song_download_url(
     client: &reqwest::Client,
+    api_base: &str,
+    cookie: Option<&str>,
     config: &DownloadConfig,
     song_id: u64,
 ) -> Result<Option<SongUrlData>, Box<dyn std::error::Error>> {
-    let url = build_url(&config.api, "song/url", &[("id", &song_id.to_string())], config)?;
+    let song_id_str = song_id.to_string();
+    let mut params = vec![("id", song_id_str.as_str())];
+    
+    let br_str;
+    if let Some(br) = config.br {
+        br_str = br.to_string();
+        params.push(("br", br_str.as_str()));
+    }
+
+    let url = build_url(api_base, "song/url", &params, cookie, config)?;
     let resp = client.get(url).send().await?;
     if !resp.status().is_success() {
         return Ok(None);
@@ -361,10 +379,12 @@ async fn fetch_song_download_url(
 /// Fetch lyric text for a song ID
 async fn fetch_lyric(
     client: &reqwest::Client,
+    api_base: &str,
+    cookie: Option<&str>,
     config: &DownloadConfig,
     song_id: u64,
 ) -> Option<String> {
-    let url = build_url(&config.api, "lyric", &[("id", &song_id.to_string())], config).ok()?;
+    let url = build_url(api_base, "lyric", &[("id", &song_id.to_string())], cookie, config).ok()?;
     let resp = client.get(url).send().await.ok()?;
     if !resp.status().is_success() {
         return None;
@@ -404,6 +424,11 @@ fn apply_metadata(
         if let Some(album_name) = &album.name {
             tag.set_album(album_name.clone());
         }
+    }
+
+    // Set track number
+    if let Some(track_no) = song_detail.no {
+        tag.set_track(track_no);
     }
 
     if let Some(publish_time) = song_detail.publish_time {
@@ -476,6 +501,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli_playlists = args.playlists;
     let download_path = args.download_path.clone();
 
+    // The API endpoint URL is always required for execution (specified on CLI or loaded from .env)
+    let resolved_api = match cli_api {
+        Some(api) => api,
+        None => {
+            eprintln!("Error: Netease API endpoint URL is required.");
+            eprintln!("Please specify via '--api' argument or 'NETEASE_API' in .env");
+            std::process::exit(1);
+        }
+    };
+    let resolved_cookie = cli_cookie;
+
     // Ensure the download base path directory exists
     fs::create_dir_all(&download_path)?;
 
@@ -499,7 +535,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             std::process::exit(1);
         }
 
-        // Read and parse current config.json
+        // Read and parse current config.json (which does not contain api or cookie)
         let config_str = fs::read_to_string(&config_file_path)?;
         config = match serde_json::from_str(&config_str) {
             Ok(cfg) => cfg,
@@ -512,18 +548,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // If command-line/env values differ from config.json, overwrite and save
         let mut modified = false;
 
-        if let Some(ref api) = cli_api {
-            if *api != config.api {
-                config.api = api.clone();
-                modified = true;
-            }
-        }
-        if let Some(ref cookie) = cli_cookie {
-            if Some(cookie) != config.cookie.as_ref() {
-                config.cookie = Some(cookie.clone());
-                modified = true;
-            }
-        }
         if let Some(ref ua) = cli_user_agent {
             if Some(ua) != config.user_agent.as_ref() {
                 config.user_agent = Some(ua.clone());
@@ -569,17 +593,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("Resuming session '{}'. Using existing configuration.", resume_id);
         }
     } else {
-        // Create new download session. Endpoint URL API base is mandatory.
-        let resolved_api = match cli_api {
-            Some(api) => api,
-            None => {
-                eprintln!("Error: Netease API endpoint URL is required.");
-                eprintln!("Please specify via '--api' argument or 'NETEASE_API' in .env");
-                std::process::exit(1);
-            }
-        };
-
-        // Ensure at least one track, album, or playlist target is supplied
+        // Create new download session. Ensure at least one track, album, or playlist target is supplied.
         if cli_tracks.is_empty() && cli_albums.is_empty() && cli_playlists.is_empty() {
             eprintln!("Error: No tracks, albums, or playlists specified for download.");
             eprintln!("Please specify at least one target using --track, --album, or --playlist");
@@ -596,8 +610,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         config = DownloadConfig {
             download_id,
             time_created,
-            api: resolved_api,
-            cookie: cli_cookie,
             download_path: download_path.clone(),
             user_agent: cli_user_agent,
             query_params: cli_query_params,
@@ -637,7 +649,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Album tracks
     for &album_id in &config.albums {
         println!("Fetching song IDs for album {}...", album_id);
-        match fetch_album_song_ids(&client, &config, album_id).await {
+        match fetch_album_song_ids(&client, &resolved_api, resolved_cookie.as_deref(), &config, album_id).await {
             Ok(ids) => {
                 for id in ids {
                     all_target_song_ids.insert(id);
@@ -652,7 +664,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Playlist tracks
     for &playlist_id in &config.playlists {
         println!("Fetching song IDs for playlist {}...", playlist_id);
-        match fetch_playlist_song_ids(&client, &config, playlist_id).await {
+        match fetch_playlist_song_ids(&client, &resolved_api, resolved_cookie.as_deref(), &config, playlist_id).await {
             Ok(ids) => {
                 for id in ids {
                     all_target_song_ids.insert(id);
@@ -709,7 +721,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 9. Fetch details (metadata) for all target song IDs to use during tag writing
     println!("Fetching metadata for target songs...");
     let target_ids_vec: Vec<u64> = all_target_song_ids.iter().copied().collect();
-    let song_details = fetch_song_details(&client, &config, &target_ids_vec).await?;
+    let song_details = fetch_song_details(&client, &resolved_api, resolved_cookie.as_deref(), &config, &target_ids_vec).await?;
 
     // 10. Process downloading of missing songs
     let total_missing = missing_ids.len();
@@ -737,7 +749,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("{} Downloading song: \"{}\" (ID: {})", progress_prefix, display_name, song_id);
 
         // Fetch download link from song url API
-        let url_data = match fetch_song_download_url(&client, &config, song_id).await {
+        let url_data = match fetch_song_download_url(&client, &resolved_api, resolved_cookie.as_deref(), &config, song_id).await {
             Ok(Some(data)) => data,
             _ => {
                 eprintln!("{} Error: Failed to fetch download URL for ID {}, skipping...", progress_prefix, song_id);
@@ -801,7 +813,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         // Fetch lyrics
         println!("  -> Fetching lyrics...");
-        let lyric = fetch_lyric(&client, &config, song_id).await;
+        let lyric = fetch_lyric(&client, &resolved_api, resolved_cookie.as_deref(), &config, song_id).await;
 
         // Download album cover artwork if available
         let mut cover_bytes = None;
