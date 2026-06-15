@@ -42,6 +42,8 @@
 | `--playlist` | — | 要下载的歌单 ID (可指定多个) |
 | `--resume` | — | 要恢复下载的文件夹路径 |
 | `--concurrent` | `CONCURRENT_DOWNLOADS` | 最大并发下载数 (默认：`3`) |
+| `--no-metadata` | `NO_METADATA` | 不在下载的歌曲中嵌入文本元数据（标题、歌手、歌词等） |
+| `--no-cover` | `NO_COVER` | 不在下载的歌曲中嵌入封面图片 |
 
 ## 使用方法
 

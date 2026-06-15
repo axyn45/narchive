@@ -51,4 +51,12 @@ pub struct Args {
     /// Maximum concurrent downloads
     #[arg(long = "concurrent", env = "CONCURRENT_DOWNLOADS", default_value_t = 3)]
     pub concurrent: usize,
+
+    /// Do not embed textual metadata into downloaded songs
+    #[arg(long = "no-metadata", env = "NO_METADATA")]
+    pub no_metadata: bool,
+
+    /// Do not embed cover art into downloaded songs
+    #[arg(long = "no-cover", env = "NO_COVER")]
+    pub no_cover: bool,
 }

@@ -42,6 +42,8 @@ This tool requires an active instance of a Netease Cloud Music API. It is design
 | `--playlist` | — | Playlist ID(s) to download (can be specified multiple times) |
 | `--resume` | — | Path to the download folder to resume |
 | `--concurrent` | `CONCURRENT_DOWNLOADS` | Maximum concurrent downloads (default: `3`) |
+| `--no-metadata` | `NO_METADATA` | Do not embed textual metadata (title, artist, lyrics, etc.) |
+| `--no-cover` | `NO_COVER` | Do not embed cover art |
 
 ## Usage
 

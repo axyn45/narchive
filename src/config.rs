@@ -13,6 +13,10 @@ pub struct DownloadConfig {
     pub tracks: Vec<u64>,
     pub albums: Vec<u64>,
     pub playlists: Vec<u64>,
+    #[serde(default)]
+    pub no_metadata: bool,
+    #[serde(default)]
+    pub no_cover: bool,
 }
 
 /// Find the configuration file in the specified resume directory

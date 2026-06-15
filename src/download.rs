@@ -205,34 +205,40 @@ pub async fn download_single_song(
         drop(temp_file);
 
         // Fetch lyrics
-        pb.set_style(
-            indicatif::ProgressStyle::default_spinner()
-                .template("  {spinner:.cyan} {msg}")
-                .unwrap()
-        );
-        pb.set_message(format!("Fetching lyrics: {}", display_name));
-        let lyric = fetch_lyric(&client, &resolved_api, resolved_cookie.as_deref(), &config, song_id).await;
+        let lyric = if config.no_metadata {
+            None
+        } else {
+            pb.set_style(
+                indicatif::ProgressStyle::default_spinner()
+                    .template("  {spinner:.cyan} {msg}")
+                    .unwrap()
+            );
+            pb.set_message(format!("Fetching lyrics: {}", display_name));
+            fetch_lyric(&client, &resolved_api, resolved_cookie.as_deref(), &config, song_id).await
+        };
 
         // Download cover artwork
         let mut cover_bytes = None;
         let mut cover_mime = None;
-        if let Some(album) = &detail.al {
-            if let Some(pic_url) = &album.pic_url {
-                pb.set_message(format!("Downloading cover: {}", display_name));
-                if let Ok(cover_resp) = client.get(pic_url).send().await {
-                    if cover_resp.status().is_success() {
-                        let mime_str = cover_resp.headers()
-                            .get(reqwest::header::CONTENT_TYPE)
-                            .and_then(|v| v.to_str().ok())
-                            .unwrap_or("image/jpeg")
-                            .to_string();
-                        
-                        if let Ok(bytes) = cover_resp.bytes().await {
-                            cover_bytes = Some(bytes.to_vec());
-                            cover_mime = match mime_str.as_str() {
-                                "image/png" => Some(MimeType::Png),
-                                _ => Some(MimeType::Jpeg),
-                            };
+        if !config.no_cover {
+            if let Some(album) = &detail.al {
+                if let Some(pic_url) = &album.pic_url {
+                    pb.set_message(format!("Downloading cover: {}", display_name));
+                    if let Ok(cover_resp) = client.get(pic_url).send().await {
+                        if cover_resp.status().is_success() {
+                            let mime_str = cover_resp.headers()
+                                .get(reqwest::header::CONTENT_TYPE)
+                                .and_then(|v| v.to_str().ok())
+                                .unwrap_or("image/jpeg")
+                                .to_string();
+                            
+                            if let Ok(bytes) = cover_resp.bytes().await {
+                                cover_bytes = Some(bytes.to_vec());
+                                cover_mime = match mime_str.as_str() {
+                                    "image/png" => Some(MimeType::Png),
+                                    _ => Some(MimeType::Jpeg),
+                                };
+                            }
                         }
                     }
                 }
@@ -241,7 +247,7 @@ pub async fn download_single_song(
 
         // Embed tags
         pb.set_message(format!("Embedding tags: {}", display_name));
-        if let Err(e) = apply_metadata(&temp_filepath, &detail, lyric, cover_bytes, cover_mime) {
+        if let Err(e) = apply_metadata(&temp_filepath, &detail, lyric, cover_bytes, cover_mime, config.no_metadata) {
             let _ = mp.println(format!("  \x1b[33m⚠️\x1b[0m Warning: Failed to embed tags for {}: {}", display_name, e));
         }
 

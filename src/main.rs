@@ -195,6 +195,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 modified = true;
             }
         }
+        if args.no_metadata && !config.no_metadata {
+            config.no_metadata = true;
+            modified = true;
+        }
+        if args.no_cover && !config.no_cover {
+            config.no_cover = true;
+            modified = true;
+        }
 
         let target_config_path = session_dir.join(".narchive-dl");
         if modified {
@@ -253,6 +261,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             tracks: cli_tracks,
             albums: cli_albums,
             playlists: cli_playlists,
+            no_metadata: args.no_metadata,
+            no_cover: args.no_cover,
         };
 
         let config_file_path = session_dir.join(".narchive-dl");

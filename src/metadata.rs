@@ -42,6 +42,7 @@ pub fn apply_metadata(
     lyric: Option<String>,
     cover_bytes: Option<Vec<u8>>,
     cover_mime: Option<MimeType>,
+    no_metadata: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut tagged_file = Probe::open(filepath)?.guess_file_type()?.read()?;
     let primary_type = tagged_file.primary_tag_type();
@@ -53,31 +54,41 @@ pub fn apply_metadata(
         }
     };
 
-    // Set standard Accessor fields
-    tag.set_title(song_detail.name.clone());
+    if !no_metadata {
+        // Set standard Accessor fields
+        tag.set_title(song_detail.name.clone());
 
-    if let Some(artists) = &song_detail.ar {
-        let artist_str = artists.iter().map(|a| a.name.as_str()).collect::<Vec<_>>().join(", ");
-        tag.set_artist(artist_str);
-    }
-
-    if let Some(album) = &song_detail.al {
-        if let Some(album_name) = &album.name {
-            tag.set_album(album_name.clone());
+        if let Some(artists) = &song_detail.ar {
+            let artist_str = artists.iter().map(|a| a.name.as_str()).collect::<Vec<_>>().join(", ");
+            tag.set_artist(artist_str);
         }
-    }
 
-    // Set track number
-    if let Some(track_no) = song_detail.no {
-        tag.set_track(track_no);
-    }
+        if let Some(album) = &song_detail.al {
+            if let Some(album_name) = &album.name {
+                tag.set_album(album_name.clone());
+            }
+        }
 
-    if let Some(publish_time) = song_detail.publish_time {
-        if let Some(dt) = Utc.timestamp_millis_opt(publish_time).single() {
-            tag.set_year(dt.year() as u32);
+        // Set track number
+        if let Some(track_no) = song_detail.no {
+            tag.set_track(track_no);
+        }
+
+        if let Some(publish_time) = song_detail.publish_time {
+            if let Some(dt) = Utc.timestamp_millis_opt(publish_time).single() {
+                tag.set_year(dt.year() as u32);
+                tag.insert(TagItem::new(
+                    ItemKey::ReleaseDate,
+                    ItemValue::Text(dt.format("%Y-%m-%d").to_string()),
+                ));
+            }
+        }
+
+        // Set lyrics tag
+        if let Some(lyrics_text) = lyric {
             tag.insert(TagItem::new(
-                ItemKey::ReleaseDate,
-                ItemValue::Text(dt.format("%Y-%m-%d").to_string()),
+                ItemKey::Lyrics,
+                ItemValue::Text(lyrics_text),
             ));
         }
     }
@@ -87,19 +98,11 @@ pub fn apply_metadata(
         ItemKey::Unknown("NETEASE_ID".to_string()),
         ItemValue::Text(song_detail.id.to_string()),
     ));
-    // Also save it inside the standard Comment tag as a robust format-agnostic fallback
+    // Also save it inside the standard Comment tag as a robust fallback
     let _ = tag.insert(TagItem::new(
         ItemKey::Comment,
         ItemValue::Text(format!("NETEASE_ID:{}", song_detail.id)),
     ));
-
-    // Set lyrics tag
-    if let Some(lyrics_text) = lyric {
-        tag.insert(TagItem::new(
-            ItemKey::Lyrics,
-            ItemValue::Text(lyrics_text),
-        ));
-    }
 
     // Embed album cover art
     if let Some(bytes) = cover_bytes {
