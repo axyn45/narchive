@@ -59,8 +59,13 @@ pub fn apply_metadata(
         tag.set_title(song_detail.name.clone());
 
         if let Some(artists) = &song_detail.ar {
-            let artist_str = artists.iter().map(|a| a.name.as_str()).collect::<Vec<_>>().join(r"\\");
-            tag.set_artist(artist_str);
+            tag.remove_key(&ItemKey::TrackArtist);
+            for artist in artists {
+                tag.push(TagItem::new(
+                    ItemKey::TrackArtist,
+                    ItemValue::Text(artist.name.clone()),
+                ));
+            }
         }
 
         if let Some(album) = &song_detail.al {
