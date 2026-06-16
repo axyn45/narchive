@@ -59,7 +59,7 @@ pub fn apply_metadata(
         tag.set_title(song_detail.name.clone());
 
         if let Some(artists) = &song_detail.ar {
-            let artist_str = artists.iter().map(|a| a.name.as_str()).collect::<Vec<_>>().join(", ");
+            let artist_str = artists.iter().map(|a| a.name.as_str()).collect::<Vec<_>>().join(r"\\");
             tag.set_artist(artist_str);
         }
 
