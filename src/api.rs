@@ -3,12 +3,16 @@ use serde::Deserialize;
 use crate::config::DownloadConfig;
 
 #[derive(Deserialize, Debug, Clone)]
+#[allow(dead_code)]
 pub struct SongArtist {
+    pub id: Option<u64>,
     pub name: String,
 }
 
 #[derive(Deserialize, Debug, Clone)]
+#[allow(dead_code)]
 pub struct SongAlbum {
+    pub id: Option<u64>,
     pub name: Option<String>,
     #[serde(rename = "picUrl")]
     pub pic_url: Option<String>,
