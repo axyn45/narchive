@@ -147,8 +147,19 @@ pub async fn download_single_song(
         let temp_filepath = session_dir.join(&temp_filename);
         
         let sanitized_base = sanitize_filename(&display_name);
-        let final_filename = format!("{}.{}", sanitized_base, ext);
-        let final_filepath = session_dir.join(&final_filename);
+        let mut final_filename = format!("{}.{}", sanitized_base, ext);
+        let mut final_filepath = session_dir.join(&final_filename);
+
+        // Handle name collisions if the file already exists but belongs to a different song ID
+        if final_filepath.exists() {
+            if let Some(existing_id) = get_netease_id_from_file(&final_filepath) {
+                if existing_id != song_id {
+                    let unique_filename = format!("{} [{}].{}", sanitized_base, song_id, ext);
+                    final_filename = unique_filename;
+                    final_filepath = session_dir.join(&final_filename);
+                }
+            }
+        }
 
         // Start downloading stream
         pb.set_message(format!("Connecting: {}", display_name));
