@@ -9,7 +9,7 @@ use crate::api::SongDetail;
 
 /// Retrieve the Netease ID from an audio file's metadata
 pub fn get_netease_id_from_file(path: &Path) -> Option<u64> {
-    let tagged_file = Probe::open(path).ok()?.read().ok()?;
+    let tagged_file = Probe::open(path).ok()?.guess_file_type().ok()?.read().ok()?;
     let tag = tagged_file.primary_tag()?;
     
     // Check all tag items for the Comment field containing our ID
