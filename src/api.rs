@@ -1,6 +1,6 @@
-use std::collections::HashMap;
-use serde::Deserialize;
 use crate::config::DownloadConfig;
+use serde::Deserialize;
+use std::collections::HashMap;
 
 #[derive(Deserialize, Debug, Clone)]
 #[allow(dead_code)]
@@ -90,7 +90,11 @@ pub fn build_url(
     cookie: Option<&str>,
     config: &DownloadConfig,
 ) -> Result<reqwest::Url, Box<dyn std::error::Error>> {
-    let mut url = reqwest::Url::parse(&format!("{}/{}", api_base.trim_end_matches('/'), path.trim_start_matches('/')))?;
+    let mut url = reqwest::Url::parse(&format!(
+        "{}/{}",
+        api_base.trim_end_matches('/'),
+        path.trim_start_matches('/')
+    ))?;
     {
         let mut query_pairs = url.query_pairs_mut();
         for &(k, v) in params {
@@ -102,7 +106,7 @@ pub fn build_url(
         // Use randomCNIP=true by default to bypass regional limitations
         query_pairs.append_pair("randomCNIP", "true");
     }
-    
+
     // Append raw custom query string if present
     if let Some(custom_query) = &config.query_params {
         let current_query = url.query().unwrap_or("");
@@ -112,7 +116,7 @@ pub fn build_url(
             url.set_query(Some(custom_query));
         }
     }
-    
+
     Ok(url)
 }
 
@@ -125,18 +129,31 @@ pub async fn fetch_song_details(
     song_ids: &[u64],
 ) -> Result<HashMap<u64, SongDetail>, Box<dyn std::error::Error>> {
     let mut details = HashMap::new();
-    
+
     // Batch in chunks of 100 to avoid exceeding URL limits
     for chunk in song_ids.chunks(100) {
-        let ids_str = chunk.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(",");
-        let url = build_url(api_base, "song/detail", &[("ids", &ids_str)], cookie, config)?;
-        
+        let ids_str = chunk
+            .iter()
+            .map(|id| id.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+        let url = build_url(
+            api_base,
+            "song/detail",
+            &[("ids", &ids_str)],
+            cookie,
+            config,
+        )?;
+
         let resp = client.get(url).send().await?;
         if !resp.status().is_success() {
-            eprintln!("Warning: failed to fetch song details for batch: HTTP {}", resp.status());
+            eprintln!(
+                "Warning: failed to fetch song details for batch: HTTP {}",
+                resp.status()
+            );
             continue;
         }
-        
+
         let body: SongDetailResponse = resp.json().await?;
         if let Some(songs) = body.songs {
             for song in songs {
@@ -144,7 +161,7 @@ pub async fn fetch_song_details(
             }
         }
     }
-    
+
     Ok(details)
 }
 
@@ -156,12 +173,18 @@ pub async fn fetch_album_song_ids(
     config: &DownloadConfig,
     album_id: u64,
 ) -> Result<Vec<u64>, Box<dyn std::error::Error>> {
-    let url = build_url(api_base, "album", &[("id", &album_id.to_string())], cookie, config)?;
+    let url = build_url(
+        api_base,
+        "album",
+        &[("id", &album_id.to_string())],
+        cookie,
+        config,
+    )?;
     let resp = client.get(url).send().await?;
     if !resp.status().is_success() {
         return Err(format!("Failed to fetch album {}: HTTP {}", album_id, resp.status()).into());
     }
-    
+
     let body: AlbumResponse = resp.json().await?;
     let mut song_ids = vec![];
     if let Some(songs) = body.songs {
@@ -180,12 +203,23 @@ pub async fn fetch_playlist_song_ids(
     config: &DownloadConfig,
     playlist_id: u64,
 ) -> Result<Vec<u64>, Box<dyn std::error::Error>> {
-    let url = build_url(api_base, "playlist/detail", &[("id", &playlist_id.to_string())], cookie, config)?;
+    let url = build_url(
+        api_base,
+        "playlist/detail",
+        &[("id", &playlist_id.to_string())],
+        cookie,
+        config,
+    )?;
     let resp = client.get(url).send().await?;
     if !resp.status().is_success() {
-        return Err(format!("Failed to fetch playlist {}: HTTP {}", playlist_id, resp.status()).into());
+        return Err(format!(
+            "Failed to fetch playlist {}: HTTP {}",
+            playlist_id,
+            resp.status()
+        )
+        .into());
     }
-    
+
     let body: PlaylistDetailResponse = resp.json().await?;
     let mut song_ids = vec![];
     if let Some(playlist) = body.playlist {
@@ -208,7 +242,7 @@ pub async fn fetch_song_download_url(
 ) -> Result<Option<SongUrlData>, Box<dyn std::error::Error>> {
     let song_id_str = song_id.to_string();
     let mut params = vec![("id", song_id_str.as_str())];
-    
+
     let br_str;
     if let Some(br) = config.br {
         br_str = br.to_string();
@@ -220,7 +254,7 @@ pub async fn fetch_song_download_url(
     if !resp.status().is_success() {
         return Ok(None);
     }
-    
+
     let body: SongUrlResponse = resp.json().await?;
     if let Some(mut data_list) = body.data {
         if !data_list.is_empty() {
@@ -238,12 +272,19 @@ pub async fn fetch_lyric(
     config: &DownloadConfig,
     song_id: u64,
 ) -> Option<String> {
-    let url = build_url(api_base, "lyric", &[("id", &song_id.to_string())], cookie, config).ok()?;
+    let url = build_url(
+        api_base,
+        "lyric",
+        &[("id", &song_id.to_string())],
+        cookie,
+        config,
+    )
+    .ok()?;
     let resp = client.get(url).send().await.ok()?;
     if !resp.status().is_success() {
         return None;
     }
-    
+
     let body: LyricResponse = resp.json().await.ok()?;
     body.lrc.and_then(|l| l.lyric)
 }

@@ -1,17 +1,22 @@
-use std::path::Path;
-use chrono::{TimeZone, Utc, Datelike};
-use lofty::file::{AudioFile, TaggedFileExt};
-use lofty::probe::Probe;
-use lofty::picture::{Picture, PictureType, MimeType};
-use lofty::tag::{ItemKey, ItemValue, TagItem, Tag, Accessor};
-use lofty::config::WriteOptions;
 use crate::api::SongDetail;
+use chrono::{Datelike, TimeZone, Utc};
+use lofty::config::WriteOptions;
+use lofty::file::{AudioFile, TaggedFileExt};
+use lofty::picture::{MimeType, Picture, PictureType};
+use lofty::probe::Probe;
+use lofty::tag::{Accessor, ItemKey, ItemValue, Tag, TagItem};
+use std::path::Path;
 
 /// Retrieve the Netease ID from an audio file's metadata
 pub fn get_netease_id_from_file(path: &Path) -> Option<u64> {
-    let tagged_file = Probe::open(path).ok()?.guess_file_type().ok()?.read().ok()?;
+    let tagged_file = Probe::open(path)
+        .ok()?
+        .guess_file_type()
+        .ok()?
+        .read()
+        .ok()?;
     let tag = tagged_file.primary_tag()?;
-    
+
     // Check all tag items for the Comment field containing our ID
     for item in tag.items() {
         if item.key() == &ItemKey::Comment {
@@ -24,14 +29,14 @@ pub fn get_netease_id_from_file(path: &Path) -> Option<u64> {
             }
         }
     }
-    
+
     // Fallback: Check if it was saved as a custom text frame
     if let Some(id_str) = tag.get_string(&ItemKey::Unknown("NETEASE_ID".to_string())) {
         if let Ok(id) = id_str.parse::<u64>() {
             return Some(id);
         }
     }
-    
+
     None
 }
 
@@ -91,10 +96,7 @@ pub fn apply_metadata(
 
         // Set lyrics tag
         if let Some(lyrics_text) = lyric {
-            tag.insert(TagItem::new(
-                ItemKey::Lyrics,
-                ItemValue::Text(lyrics_text),
-            ));
+            tag.insert(TagItem::new(ItemKey::Lyrics, ItemValue::Text(lyrics_text)));
         }
     }
 
@@ -115,13 +117,8 @@ pub fn apply_metadata(
         while !tag.pictures().is_empty() {
             tag.remove_picture(0);
         }
-        
-        let picture = Picture::new_unchecked(
-            PictureType::CoverFront,
-            cover_mime,
-            None,
-            bytes,
-        );
+
+        let picture = Picture::new_unchecked(PictureType::CoverFront, cover_mime, None, bytes);
         tag.push_picture(picture);
     }
 

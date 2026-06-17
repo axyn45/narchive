@@ -1,5 +1,5 @@
-use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
 
 /// Persistent configuration stored as JSON in the session folder.
 /// Note: api and cookie are excluded to be specified at runtime or loaded from .env.
@@ -22,10 +22,16 @@ pub struct DownloadConfig {
 /// Find the configuration file in the specified resume directory
 pub fn get_resume_config_path(resume_dir: &Path) -> Result<PathBuf, String> {
     if !resume_dir.exists() {
-        return Err(format!("Resume directory '{:?}' does not exist.", resume_dir));
+        return Err(format!(
+            "Resume directory '{:?}' does not exist.",
+            resume_dir
+        ));
     }
     if !resume_dir.is_dir() {
-        return Err(format!("Resume path '{:?}' is not a directory.", resume_dir));
+        return Err(format!(
+            "Resume path '{:?}' is not a directory.",
+            resume_dir
+        ));
     }
 
     let files = [".narchive-dl", ".config", "config.json"];
