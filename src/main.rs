@@ -1,21 +1,21 @@
+mod api;
 mod args;
 mod config;
-mod api;
+mod download;
 mod metadata;
 mod utils;
-mod download;
 
+use chrono::Utc;
+use clap::Parser;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use clap::Parser;
-use chrono::Utc;
 
+use api::fetch_song_details;
 use args::Args;
 use config::{DownloadConfig, get_resume_config_path};
-use api::fetch_song_details;
-use utils::{generate_download_id, create_dir_one_level};
-use download::{resolve_song_ids, scan_local_downloads, download_single_song};
+use download::{download_single_song, resolve_song_ids, scan_local_downloads};
+use utils::{create_dir_one_level, format_bytes, generate_download_id};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -26,7 +26,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
 
     if args.concurrent == 0 {
-        eprintln!("Error: Concurrency limit (--concurrent / CONCURRENT_DOWNLOADS) must be at least 1.");
+        eprintln!(
+            "Error: Concurrency limit (--concurrent / CONCURRENT_DOWNLOADS) must be at least 1."
+        );
         std::process::exit(1);
     }
 
@@ -70,7 +72,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let config_str = match fs::read_to_string(&config_file_path) {
             Ok(s) => s,
             Err(e) => {
-                eprintln!("Error: Failed to read configuration file '{:?}': {}", config_file_path, e);
+                eprintln!(
+                    "Error: Failed to read configuration file '{:?}': {}",
+                    config_file_path, e
+                );
                 std::process::exit(1);
             }
         };
@@ -78,7 +83,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut val: serde_json::Value = match serde_json::from_str(&config_str) {
             Ok(v) => v,
             Err(e) => {
-                eprintln!("Error: The configuration file '{:?}' is corrupted or contains invalid JSON.", config_file_path);
+                eprintln!(
+                    "Error: The configuration file '{:?}' is corrupted or contains invalid JSON.",
+                    config_file_path
+                );
                 eprintln!("Details: {}", e);
                 std::process::exit(1);
             }
@@ -92,7 +100,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Migrate 'time_created' -> 'time'
         if let Some(time_created_val) = val.get("time_created") {
             if let Some(time_str) = time_created_val.as_str() {
-                let ms = if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(time_str, "%Y%m%d%H%M%S") {
+                let ms = if let Ok(dt) =
+                    chrono::NaiveDateTime::parse_from_str(time_str, "%Y%m%d%H%M%S")
+                {
                     dt.and_utc().timestamp_millis() as u64
                 } else {
                     chrono::Utc::now().timestamp_millis() as u64
@@ -122,7 +132,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         config = match serde_json::from_value(val) {
             Ok(cfg) => cfg,
             Err(e) => {
-                eprintln!("Error: Failed to parse configuration in '{:?}': {}", resume_path, e);
+                eprintln!(
+                    "Error: Failed to parse configuration in '{:?}': {}",
+                    resume_path, e
+                );
                 std::process::exit(1);
             }
         };
@@ -141,7 +154,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let abs_target_path = fs::canonicalize(target_path)?
                 .to_string_lossy()
                 .into_owned();
-            
+
             if config.path != abs_target_path {
                 config.path = abs_target_path;
             }
@@ -209,7 +222,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("⚙️ Configuration overridden. Updating .narchive-dl...");
             let updated_config_str = serde_json::to_string_pretty(&config)?;
             fs::write(&target_config_path, updated_config_str)?;
-            if config_file_path != target_config_path && config_file_path.parent() == target_config_path.parent() {
+            if config_file_path != target_config_path
+                && config_file_path.parent() == target_config_path.parent()
+            {
                 let _ = fs::remove_file(&config_file_path);
             }
         } else {
@@ -288,12 +303,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     spinner.set_style(
         indicatif::ProgressStyle::default_spinner()
             .template("{spinner:.cyan} {msg}")
-            .unwrap()
+            .unwrap(),
     );
     spinner.enable_steady_tick(std::time::Duration::from_millis(80));
     spinner.set_message("Resolving song lists from API...");
 
-    let all_target_song_ids = resolve_song_ids(&client, &resolved_api, resolved_cookie.as_deref(), &config, &spinner).await;
+    let all_target_song_ids = resolve_song_ids(
+        &client,
+        &resolved_api,
+        resolved_cookie.as_deref(),
+        &config,
+        &spinner,
+    )
+    .await;
 
     if all_target_song_ids.is_empty() {
         spinner.finish_and_clear();
@@ -326,7 +348,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         missing_ids.len()
     ));
     let target_ids_vec: Vec<u64> = all_target_song_ids.iter().copied().collect();
-    let song_details = match fetch_song_details(&client, &resolved_api, resolved_cookie.as_deref(), &config, &target_ids_vec).await {
+    let song_details = match fetch_song_details(
+        &client,
+        &resolved_api,
+        resolved_cookie.as_deref(),
+        &config,
+        &target_ids_vec,
+    )
+    .await
+    {
         Ok(details) => details,
         Err(e) => {
             spinner.finish_and_clear();
@@ -347,7 +377,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let total_missing = missing_ids.len();
     let song_details = Arc::new(song_details);
     let mp = Arc::new(indicatif::MultiProgress::new());
-    
+
     let overall_pb = mp.add(indicatif::ProgressBar::new(total_missing as u64));
     overall_pb.set_style(
         indicatif::ProgressStyle::default_bar()
@@ -361,6 +391,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let sem = Arc::new(tokio::sync::Semaphore::new(args.concurrent));
     let mut join_set = tokio::task::JoinSet::new();
 
+    let total_active_bytes = Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let total_session_bytes = Arc::new(std::sync::atomic::AtomicU64::new(0));
+
+    // Spawn a background task to compute and display the total download speed
+    let overall_pb_clone = overall_pb.clone();
+    let total_active_bytes_clone = Arc::clone(&total_active_bytes);
+    tokio::spawn(async move {
+        let mut last_bytes = 0;
+        let mut last_time = tokio::time::Instant::now();
+        while !overall_pb_clone.is_finished() {
+            tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
+            let current_bytes = total_active_bytes_clone.load(std::sync::atomic::Ordering::Relaxed);
+            let current_time = tokio::time::Instant::now();
+            let elapsed = current_time.duration_since(last_time).as_secs_f64();
+            if elapsed > 0.0 {
+                let diff = current_bytes.saturating_sub(last_bytes);
+                let speed = diff as f64 / elapsed;
+                overall_pb_clone.set_message(format!(
+                    "Downloading songs... ({}/s)",
+                    format_bytes(speed as u64)
+                ));
+                last_bytes = current_bytes;
+                last_time = current_time;
+            }
+        }
+    });
+
     for &song_id in &missing_ids {
         let sem = Arc::clone(&sem);
         let mp = Arc::clone(&mp);
@@ -371,6 +428,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let config = config.clone();
         let session_dir = session_dir.clone();
         let song_details = Arc::clone(&song_details);
+        let total_active_bytes = Arc::clone(&total_active_bytes);
+        let total_session_bytes = Arc::clone(&total_session_bytes);
 
         let detail = match song_details.get(&song_id) {
             Some(d) => d.clone(),
@@ -392,7 +451,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 detail,
                 mp,
                 overall_pb,
-            ).await;
+                total_active_bytes,
+                total_session_bytes,
+            )
+            .await;
         });
     }
 
@@ -403,7 +465,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     overall_pb.finish_with_message("Done!");
-    println!("\n✨ Download session completed successfully!");
+    let total_downloaded_size = total_session_bytes.load(std::sync::atomic::Ordering::SeqCst);
+    println!(
+        "\n✨ Download session completed successfully! Total downloaded: {}",
+        format_bytes(total_downloaded_size)
+    );
     Ok(())
 }
-

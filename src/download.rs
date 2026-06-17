@@ -1,15 +1,15 @@
+use lofty::picture::MimeType;
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use lofty::picture::MimeType;
 
-use crate::config::DownloadConfig;
 use crate::api::{
-    fetch_album_song_ids, fetch_playlist_song_ids, fetch_song_download_url, fetch_lyric, SongDetail,
+    SongDetail, fetch_album_song_ids, fetch_lyric, fetch_playlist_song_ids, fetch_song_download_url,
 };
-use crate::metadata::{get_netease_id_from_file, apply_metadata};
+use crate::config::DownloadConfig;
+use crate::metadata::{apply_metadata, get_netease_id_from_file};
 use crate::utils::sanitize_filename;
 
 /// Gathers and resolves all target song IDs from config (tracks, albums, playlists)
@@ -37,7 +37,10 @@ pub async fn resolve_song_ids(
                 }
             }
             Err(e) => {
-                spinner.println(format!("  \x1b[33m⚠️\x1b[0m Warning: Failed to fetch song IDs for album {}: {}", album_id, e));
+                spinner.println(format!(
+                    "  \x1b[33m⚠️\x1b[0m Warning: Failed to fetch song IDs for album {}: {}",
+                    album_id, e
+                ));
             }
         }
     }
@@ -45,14 +48,19 @@ pub async fn resolve_song_ids(
     // Playlist tracks
     for &playlist_id in &config.playlists {
         spinner.set_message(format!("Resolving playlist {}...", playlist_id));
-        match fetch_playlist_song_ids(client, resolved_api, resolved_cookie, config, playlist_id).await {
+        match fetch_playlist_song_ids(client, resolved_api, resolved_cookie, config, playlist_id)
+            .await
+        {
             Ok(ids) => {
                 for id in ids {
                     all_target_song_ids.insert(id);
                 }
             }
             Err(e) => {
-                spinner.println(format!("  \x1b[33m⚠️\x1b[0m Warning: Failed to fetch song IDs for playlist {}: {}", playlist_id, e));
+                spinner.println(format!(
+                    "  \x1b[33m⚠️\x1b[0m Warning: Failed to fetch song IDs for playlist {}: {}",
+                    playlist_id, e
+                ));
             }
         }
     }
@@ -70,7 +78,11 @@ pub fn scan_local_downloads(session_dir: &Path) -> HashMap<u64, PathBuf> {
                 if path.is_file() {
                     if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
                         let ext_lower = ext.to_lowercase();
-                        if ext_lower == "mp3" || ext_lower == "ogg" || ext_lower == "flac" || ext_lower == "wav" {
+                        if ext_lower == "mp3"
+                            || ext_lower == "ogg"
+                            || ext_lower == "flac"
+                            || ext_lower == "wav"
+                        {
                             if let Some(song_id) = get_netease_id_from_file(&path) {
                                 downloaded_songs.insert(song_id, path.clone());
                             }
@@ -94,11 +106,21 @@ pub async fn download_single_song(
     detail: SongDetail,
     mp: Arc<indicatif::MultiProgress>,
     overall_pb: indicatif::ProgressBar,
+    total_active_bytes: Arc<std::sync::atomic::AtomicU64>,
+    total_session_bytes: Arc<std::sync::atomic::AtomicU64>,
 ) {
-    let artist_names = detail.ar.as_ref()
-        .map(|artists| artists.iter().map(|a| a.name.as_str()).collect::<Vec<_>>().join(", "))
+    let artist_names = detail
+        .ar
+        .as_ref()
+        .map(|artists| {
+            artists
+                .iter()
+                .map(|a| a.name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        })
         .unwrap_or_default();
-    
+
     let display_name = if artist_names.is_empty() {
         detail.name.clone()
     } else {
@@ -109,7 +131,7 @@ pub async fn download_single_song(
     pb.set_style(
         indicatif::ProgressStyle::default_spinner()
             .template("  {spinner:.cyan} {msg}")
-            .unwrap()
+            .unwrap(),
     );
     pb.enable_steady_tick(std::time::Duration::from_millis(80));
     pb.set_message(format!("Queued: {}", display_name));
@@ -125,7 +147,15 @@ pub async fn download_single_song(
 
         // Fetch download link
         pb.set_message(format!("Fetching URL: {}", display_name));
-        let url_data = match fetch_song_download_url(&client, &resolved_api, resolved_cookie.as_deref(), &config, song_id).await {
+        let url_data = match fetch_song_download_url(
+            &client,
+            &resolved_api,
+            resolved_cookie.as_deref(),
+            &config,
+            song_id,
+        )
+        .await
+        {
             Ok(Some(data)) => data,
             _ => {
                 error_details = "Failed to fetch download URL".to_string();
@@ -141,11 +171,14 @@ pub async fn download_single_song(
             }
         };
 
-        let ext = url_data.file_type.unwrap_or_else(|| "mp3".to_string()).to_lowercase();
-        
+        let ext = url_data
+            .file_type
+            .unwrap_or_else(|| "mp3".to_string())
+            .to_lowercase();
+
         let temp_filename = format!("{}.{}.tmp", song_id, ext);
         let temp_filepath = session_dir.join(&temp_filename);
-        
+
         let sanitized_base = sanitize_filename(&display_name);
         let mut final_filename = format!("{}.{}", sanitized_base, ext);
         let mut final_filepath = session_dir.join(&final_filename);
@@ -184,7 +217,7 @@ pub async fn download_single_song(
             pb.set_style(
                 indicatif::ProgressStyle::default_spinner()
                     .template("  {spinner:.cyan} {msg:.bold} {bytes} ({bytes_per_sec})")
-                    .unwrap()
+                    .unwrap(),
             );
         }
         pb.set_position(0);
@@ -204,7 +237,9 @@ pub async fn download_single_song(
                 download_failed = Some(e.to_string());
                 break;
             }
-            pb.inc(chunk.len() as u64);
+            let chunk_len = chunk.len() as u64;
+            pb.inc(chunk_len);
+            total_active_bytes.fetch_add(chunk_len, std::sync::atomic::Ordering::Relaxed);
         }
 
         if let Some(err_msg) = download_failed {
@@ -212,7 +247,7 @@ pub async fn download_single_song(
             let _ = fs::remove_file(&temp_filepath);
             continue;
         }
-        
+
         drop(temp_file);
 
         // Fetch lyrics
@@ -222,10 +257,17 @@ pub async fn download_single_song(
             pb.set_style(
                 indicatif::ProgressStyle::default_spinner()
                     .template("  {spinner:.cyan} {msg}")
-                    .unwrap()
+                    .unwrap(),
             );
             pb.set_message(format!("Fetching lyrics: {}", display_name));
-            fetch_lyric(&client, &resolved_api, resolved_cookie.as_deref(), &config, song_id).await
+            fetch_lyric(
+                &client,
+                &resolved_api,
+                resolved_cookie.as_deref(),
+                &config,
+                song_id,
+            )
+            .await
         };
 
         // Download cover artwork
@@ -237,12 +279,13 @@ pub async fn download_single_song(
                     pb.set_message(format!("Downloading cover: {}", display_name));
                     if let Ok(cover_resp) = client.get(pic_url).send().await {
                         if cover_resp.status().is_success() {
-                            let mime_str = cover_resp.headers()
+                            let mime_str = cover_resp
+                                .headers()
                                 .get(reqwest::header::CONTENT_TYPE)
                                 .and_then(|v| v.to_str().ok())
                                 .unwrap_or("image/jpeg")
                                 .to_string();
-                            
+
                             if let Ok(bytes) = cover_resp.bytes().await {
                                 cover_bytes = Some(bytes.to_vec());
                                 cover_mime = match mime_str.as_str() {
@@ -258,8 +301,18 @@ pub async fn download_single_song(
 
         // Embed tags
         pb.set_message(format!("Embedding tags: {}", display_name));
-        if let Err(e) = apply_metadata(&temp_filepath, &detail, lyric, cover_bytes, cover_mime, config.no_metadata) {
-            let _ = mp.println(format!("  \x1b[33m⚠️\x1b[0m Warning: Failed to embed tags for {}: {}", display_name, e));
+        if let Err(e) = apply_metadata(
+            &temp_filepath,
+            &detail,
+            lyric,
+            cover_bytes,
+            cover_mime,
+            config.no_metadata,
+        ) {
+            let _ = mp.println(format!(
+                "  \x1b[33m⚠️\x1b[0m Warning: Failed to embed tags for {}: {}",
+                display_name, e
+            ));
         }
 
         // Finalize
@@ -269,7 +322,14 @@ pub async fn download_single_song(
             continue;
         }
 
-        let _ = mp.println(format!("  \x1b[32m✔\x1b[0m Saved: \x1b[1m{}\x1b[0m", final_filename));
+        if let Ok(metadata) = fs::metadata(&final_filepath) {
+            total_session_bytes.fetch_add(metadata.len(), std::sync::atomic::Ordering::SeqCst);
+        }
+
+        let _ = mp.println(format!(
+            "  \x1b[32m✔\x1b[0m Saved: \x1b[1m{}\x1b[0m",
+            final_filename
+        ));
         success = true;
         break;
     }
@@ -278,7 +338,10 @@ pub async fn download_single_song(
         if error_details == "Restricted/unavailable" {
             let _ = mp.println(format!("  \x1b[33m🔒\x1b[0m Restricted: {}", display_name));
         } else {
-            let _ = mp.println(format!("  \x1b[31m✘\x1b[0m Failed: {} ({})", display_name, error_details));
+            let _ = mp.println(format!(
+                "  \x1b[31m✘\x1b[0m Failed: {} ({})",
+                display_name, error_details
+            ));
         }
     }
 
