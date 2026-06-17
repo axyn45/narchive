@@ -180,18 +180,42 @@ pub async fn download_single_song(
         let temp_filepath = session_dir.join(&temp_filename);
 
         let sanitized_base = sanitize_filename(&display_name);
-        let mut final_filename = format!("{}.{}", sanitized_base, ext);
+        let default_base = if config.no_id_suffix {
+            sanitized_base.clone()
+        } else {
+            format!("{} - {}", sanitized_base, song_id)
+        };
+        let mut final_filename = format!("{}.{}", default_base, ext);
         let mut final_filepath = session_dir.join(&final_filename);
 
         // Handle name collisions if the file already exists but belongs to a different song ID
+        let mut collision_detected = false;
+        let original_filename = final_filename.clone();
+
         if final_filepath.exists() {
+            let mut is_same_song = false;
             if let Some(existing_id) = get_netease_id_from_file(&final_filepath) {
-                if existing_id != song_id {
-                    let unique_filename = format!("{} [{}].{}", sanitized_base, song_id, ext);
-                    final_filename = unique_filename;
-                    final_filepath = session_dir.join(&final_filename);
+                if existing_id == song_id {
+                    is_same_song = true;
                 }
             }
+            if !is_same_song {
+                collision_detected = true;
+                let collision_base = if config.no_id_suffix {
+                    format!("{} - {}", sanitized_base, song_id)
+                } else {
+                    format!("{} - {} - collision", sanitized_base, song_id)
+                };
+                final_filename = format!("{}.{}", collision_base, ext);
+                final_filepath = session_dir.join(&final_filename);
+            }
+        }
+
+        if collision_detected {
+            let _ = mp.println(format!(
+                "  \x1b[33m⚠️\x1b[0m Collision: '{}' already exists. Rewriting to '{}'",
+                original_filename, final_filename
+            ));
         }
 
         // Start downloading stream

@@ -59,4 +59,8 @@ pub struct Args {
     /// Do not embed cover art into downloaded songs
     #[arg(long = "no-cover", env = "NO_COVER")]
     pub no_cover: bool,
+
+    /// Do not append the song ID to the filename by default
+    #[arg(long = "no-id-suffix", env = "NO_ID_SUFFIX")]
+    pub no_id_suffix: bool,
 }

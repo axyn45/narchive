@@ -17,6 +17,8 @@ pub struct DownloadConfig {
     pub no_metadata: bool,
     #[serde(default)]
     pub no_cover: bool,
+    #[serde(default)]
+    pub no_id_suffix: bool,
 }
 
 /// Find the configuration file in the specified resume directory

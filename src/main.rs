@@ -216,6 +216,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             config.no_cover = true;
             modified = true;
         }
+        if args.no_id_suffix && !config.no_id_suffix {
+            config.no_id_suffix = true;
+            modified = true;
+        }
 
         let target_config_path = session_dir.join(".narchive-dl");
         if modified {
@@ -278,6 +282,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             playlists: cli_playlists,
             no_metadata: args.no_metadata,
             no_cover: args.no_cover,
+            no_id_suffix: args.no_id_suffix,
         };
 
         let config_file_path = session_dir.join(".narchive-dl");
